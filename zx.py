@@ -135,8 +135,31 @@ def init_db():
             details TEXT
         )
     ''')
+
+    # الجداول الجديدة المضافة
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS expenses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            title TEXT NOT NULL,
+            amount REAL NOT NULL,
+            category TEXT,
+            notes TEXT
+        )
+    ''')
+
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS purchases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            supplier_name TEXT NOT NULL,
+            product_name TEXT NOT NULL,
+            quantity INTEGER NOT NULL,
+            total_cost REAL NOT NULL
+        )
+    ''')
     
-    # إضافة مستخدمين افتراضيين لكل الرتب إذا كانت الجدول فارغاً
+    # إضافة مستخدمين افتراضيين لكل الرتب إذا كان الجدول فارغاً
     c.execute("SELECT COUNT(*) FROM users")
     if c.fetchone()[0] == 0:
         c.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", ("owner", "owner123", "الإدارة العليا (Owner)"))
@@ -278,7 +301,7 @@ st.sidebar.write("---")
 
 current_role = st.session_state.get("user_role", "كاشير المبيعات")
 
-# توزيع القوائم حسب الرتب الجديدة
+# توزيع القوائم حسب الصلاحيات مضافاً إليها الأقسام الجديدة
 if current_role == "الإدارة العليا (Owner)":
     menu_options = [
         "🛒 كاشير المبيعات (POS)",
@@ -289,6 +312,9 @@ if current_role == "الإدارة العليا (Owner)":
         "🔄 إرجاع واستبدال الفواتير",
         "📦 إدارة وتعديل المخزون والباركود",
         "🏷️ طباعة بطاقات الأسعار",
+        "💸 المصروفات والنثريات المالية",
+        "🚚 طلبات الموردين والشراء",
+        "📈 أرباح المنتجات والتقارير",
         "⚙️ إدارة الحسابات والصلاحيات",
         "📜 سجل الأحداث والرقابة",
         "💾 النسخ الاحتياطي"
@@ -297,6 +323,7 @@ elif current_role == "إدارة المستودع والمخزون":
     menu_options = [
         "📦 إدارة وتعديل المخزون والباركود",
         "🚨 تنبيهات النقص وإعادة التزويد",
+        "🚚 طلبات الموردين والشراء",
         "🏷️ طباعة بطاقات الأسعار"
     ]
 else: # كاشير المبيعات
@@ -458,6 +485,7 @@ elif menu == "📊 لوحة التحكّم الذكية (Dashboard)":
     
     conn = sqlite3.connect(DB_NAME)
     df_sales = pd.read_sql_query("SELECT * FROM sales", conn)
+    df_exp = pd.read_sql_query("SELECT * FROM expenses", conn)
     conn.close()
 
     if df_sales.empty:
@@ -468,16 +496,16 @@ elif menu == "📊 لوحة التحكّم الذكية (Dashboard)":
         df_sales['day_name'] = df_sales['date'].dt.day_name()
         df_sales['month_year'] = df_sales['date'].dt.to_period('M').astype(str)
 
-        current_month = datetime.datetime.now().strftime("%Y-%m")
-        prev_month = (datetime.datetime.now().replace(day=1) - datetime.timedelta(days=1)).strftime("%Y-%m")
-        
-        curr_profit = df_sales[df_sales['month_year'] == current_month]['net_profit'].sum()
-        prev_profit = df_sales[df_sales['month_year'] == prev_month]['net_profit'].sum()
+        total_sales = df_sales['total_price'].sum()
+        gross_profit = df_sales['net_profit'].sum()
+        total_expenses = df_exp['amount'].sum() if not df_exp.empty else 0.0
+        net_net_profit = gross_profit - total_expenses
 
-        m1, m2, m3 = st.columns(3)
-        m1.metric("أرباح الشهر الحالي", f"{curr_profit:.2f} د.أ", f"{curr_profit - prev_profit:.2f} مقارنة بالشهر السابق")
-        m2.metric("إجمالي المبيعات", f"{df_sales['total_price'].sum():.2f} د.أ")
-        m3.metric("صافي الأرباح العام", f"{df_sales['net_profit'].sum():.2f} د.أ")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("إجمالي المبيعات", f"{total_sales:.2f} د.أ")
+        m2.metric("إجمالي الأرباح", f"{gross_profit:.2f} د.أ")
+        m3.metric("إجمالي المصروفات", f"{total_expenses:.2f} د.أ")
+        m4.metric("صافي الربح النهائي", f"{net_net_profit:.2f} د.أ")
 
         st.divider()
 
@@ -684,7 +712,112 @@ elif menu == "🏷️ طباعة بطاقات الأسعار":
         st.download_button("🖨️ طباعة البطاقة (HTML)", data=f"<html><body onload='window.print();'>{tag_html}</body></html>", file_name=f"Tag_{p_data['id']}.html", mime="text/html")
 
 # ----------------------------------------------------
-# 9. إدارة الحسابات والصلاحيات (خاص بالإدارة العليا حصراً)
+# 9. المصروفات والنثريات المالية (إضافة جديدة)
+# ----------------------------------------------------
+elif menu == "💸 المصروفات والنثريات المالية":
+    st.header("💸 إدارة المصروفات والالتزامات المالية للمتجر")
+    
+    tab_ex1, tab_ex2 = st.tabs(["➕ تسجيل مصروف جديد", "📋 سجل المصروفات"])
+    
+    with tab_ex1:
+        with st.form("expense_form", clear_on_submit=True):
+            ex_title = st.text_input("عنوان المصروف (مثال: إيجار المحل، فاتورة الكهرباء، ضيافة):")
+            ex_amount = st.number_input("المبلغ (د.أ):", min_value=0.1)
+            ex_cat = st.selectbox("التصنيف:", ["تشغيلي", "رواتب", "فواتير وطاقة", "تسويق وإعلانات", "أخرى"])
+            ex_notes = st.text_area("ملاحظات إضافية:")
+            
+            if st.form_submit_button("💾 حفظ المصروف", type="primary"):
+                if ex_title and ex_amount > 0:
+                    conn = sqlite3.connect(DB_NAME)
+                    c = conn.cursor()
+                    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    c.execute("INSERT INTO expenses (date, title, amount, category, notes) VALUES (?, ?, ?, ?, ?)",
+                              (now_str, ex_title, ex_amount, ex_cat, ex_notes))
+                    conn.commit()
+                    conn.close()
+                    st.success("تم تسجيل المصروف بنجاح!")
+                    log_action(st.session_state['logged_user'], "مصروفات", f"إضافة مصروف: {ex_title} بقيمة {ex_amount} د.أ")
+                    st.rerun()
+
+    with tab_ex2:
+        conn = sqlite3.connect(DB_NAME)
+        df_expenses = pd.read_sql_query("SELECT * FROM expenses ORDER BY id DESC", conn)
+        conn.close()
+        if df_expenses.empty:
+            st.info("لا توجد مصروفات مسجلة.")
+        else:
+            st.dataframe(df_expenses, use_container_width=True, hide_index=True)
+            st.metric("إجمالي المصروفات المسجلة", f"{df_expenses['amount'].sum():.2f} د.أ")
+
+# ----------------------------------------------------
+# 10. طلبات الموردين والشراء (إضافة جديدة)
+# ----------------------------------------------------
+elif menu == "🚚 طلبات الموردين والشراء":
+    st.header("🚚 سجل طلبات التوريد وإدخال بضائع الموردين")
+    
+    tab_p1, tab_p2 = st.tabs(["➕ طلب بضاعة جديدة", "📋 سجل المشتريات"])
+    df_products = get_products()
+    
+    with tab_p1:
+        if df_products.empty:
+            st.warning("يجب إما إضافة منتجات للمخزن أولاً لتتمكن من توريدها.")
+        else:
+            with st.form("purchase_form", clear_on_submit=True):
+                sup_name = st.text_input("اسم المورد / الشركة الموردة:")
+                sel_prod_name = st.selectbox("اختر المنتج المراد زيادته:", df_products["name"].tolist())
+                pur_qty = st.number_input("الكمية المضافة للمخزن:", min_value=1, value=10)
+                pur_cost = st.number_input("إجمالي تكلفة الشراء لهذه الكمية (د.أ):", min_value=0.0)
+                
+                if st.form_submit_button("📥 تأكيد التوريد وتحديث المخزن", type="primary"):
+                    if sup_name:
+                        conn = sqlite3.connect(DB_NAME)
+                        c = conn.cursor()
+                        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        
+                        # تسجيل أمر الشراء
+                        c.execute("INSERT INTO purchases (date, supplier_name, product_name, quantity, total_cost) VALUES (?, ?, ?, ?, ?)",
+                                  (now_str, sup_name, sel_prod_name, pur_qty, pur_cost))
+                        
+                        # تحديث كمية المخزون أوتوماتيكياً
+                        c.execute("UPDATE products SET stock = stock + ? WHERE name = ?", (pur_qty, sel_prod_name))
+                        
+                        conn.commit()
+                        conn.close()
+                        
+                        st.success(f"تم توريد {pur_qty} قطعة لمنتج {sel_prod_name} وتحديث المخزون بنجاح!")
+                        log_action(st.session_state['logged_user'], "مشتريات", f"توريد {pur_qty} من {sel_prod_name} بواسطة المورد {sup_name}")
+                        st.rerun()
+
+    with tab_p2:
+        conn = sqlite3.connect(DB_NAME)
+        df_purchases = pd.read_sql_query("SELECT * FROM purchases ORDER BY id DESC", conn)
+        conn.close()
+        if df_purchases.empty:
+            st.info("لا توجد سجلات توريد سابقة.")
+        else:
+            st.dataframe(df_purchases, use_container_width=True, hide_index=True)
+
+# ----------------------------------------------------
+# 11. أرباح المنتجات والتقارير (إضافة جديدة)
+# ----------------------------------------------------
+elif menu == "📈 أرباح المنتجات والتقارير":
+    st.header("📈 تقرير أداء ومبيعات المنتجات التفصيلي")
+    
+    conn = sqlite3.connect(DB_NAME)
+    df_sales_rep = pd.read_sql_query("SELECT product_name, SUM(quantity) as total_qty, SUM(total_price) as total_rev, SUM(net_profit) as total_prof FROM sales GROUP BY product_name", conn)
+    conn.close()
+
+    if df_sales_rep.empty:
+        st.info("لا توجد بيانات مبيعات كافية لتوليد تقارير الأرباح.")
+    else:
+        st.dataframe(df_sales_rep, use_container_width=True, hide_index=True)
+        
+        st.subheader("📊 رسم بياني لأكثر المنتجات تحقيقاً للأرباح")
+        fig_prod_prof = px.bar(df_sales_rep, x="product_name", y="total_prof", labels={"product_name": "المنتج", "total_prof": "صافي الربح (د.أ)"}, color="total_prof", color_continuous_scale="Sunset")
+        st.plotly_chart(fig_prod_prof, use_container_width=True)
+
+# ----------------------------------------------------
+# 12. إدارة الحسابات والصلاحيات (خاص بالإدارة العليا حصراً)
 # ----------------------------------------------------
 elif menu == "⚙️ إدارة الحسابات والصلاحيات":
     st.header("⚙️ إدارة الحسابات، صلاحيات المستخدمين، وإضافة موظفين جدد")
@@ -738,7 +871,7 @@ elif menu == "⚙️ إدارة الحسابات والصلاحيات":
                 st.rerun()
 
 # ----------------------------------------------------
-# 10. سجل الأحداث والرقابة (Audit Log)
+# 13. سجل الأحداث والرقابة (Audit Log)
 # ----------------------------------------------------
 elif menu == "📜 سجل الأحداث والرقابة":
     st.header("📜 سجل الرقابة الأمنية")
@@ -747,7 +880,7 @@ elif menu == "📜 سجل الأحداث والرقابة":
     conn.close()
 
 # ----------------------------------------------------
-# 11. النسخ الاحتياطي للنظام
+# 14. النسخ الاحتياطي للنظام
 # ----------------------------------------------------
 elif menu == "💾 النسخ الاحتياطي":
     st.header("⚙️ النسخ الاحتياطي للقاعدة")
