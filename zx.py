@@ -5,6 +5,7 @@ import sqlite3
 import barcode
 from barcode.writer import ImageWriter
 from fpdf import FPDF
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -63,7 +64,7 @@ DB_NAME = "graduation_project_pos.db"
 
 
 # ----------------------------------------------------
-# 2. إنشاء وتحديث قاعدة البيانات (جداول متكاملة)
+# 2. إنشاء وتحديث قاعدة البيانات (جداول متكاملة مع الذمم والعملات)
 # ----------------------------------------------------
 def init_db():
   conn = sqlite3.connect(DB_NAME)
@@ -92,7 +93,8 @@ def init_db():
             total_price REAL NOT NULL,
             discount REAL DEFAULT 0.0,
             net_profit REAL NOT NULL,
-            seller_username TEXT DEFAULT 'admin'
+            seller_username TEXT DEFAULT 'admin',
+            payment_type TEXT DEFAULT 'نقدي'
         )
     """)
 
@@ -103,6 +105,7 @@ def init_db():
             phone TEXT,
             points INTEGER DEFAULT 0,
             total_spent REAL DEFAULT 0.0,
+            debt REAL DEFAULT 0.0,
             tier TEXT DEFAULT 'عادي'
         )
     """)
@@ -163,9 +166,9 @@ def init_db():
   c.execute("SELECT COUNT(*) FROM customers")
   if c.fetchone()[0] == 0:
     c.execute(
-        "INSERT INTO customers (name, phone, points, total_spent, tier)"
-        " VALUES (?, ?, ?, ?, ?)",
-        ("زبون عام", "0700000000", 0, 0.0, "عادي"),
+        "INSERT INTO customers (name, phone, points, total_spent, debt, tier)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        ("زبون عام", "0700000000", 0, 0.0, 0.0, "عادي"),
     )
 
   conn.commit()
@@ -296,7 +299,7 @@ if not st.session_state["authenticated"]:
   st.stop()
 
 # ----------------------------------------------------
-# 4. الشريط الجانبي والتنبيهات الذكية
+# 4. الشريط الجانبي والأدوات المتقدمة
 # ----------------------------------------------------
 conn = sqlite3.connect(DB_NAME)
 low_stock_count = pd.read_sql_query(
@@ -307,6 +310,13 @@ conn.close()
 st.sidebar.title("👑 لوحة التحكم الرئيسية")
 st.sidebar.markdown(f"👤 **المستخدم:** `{st.session_state['logged_user']}`")
 st.sidebar.markdown(f"🛡️ **الصلاحية:** `{st.session_state['user_role']}`")
+
+# أداة تحويل العملات السريعة في الشريط الجانبي
+with st.sidebar.expander("💱 محول العملات السريع"):
+  currency_choice = st.selectbox(
+      "العملة المعروضة:", ["دينار أردني (JOD)", "دولار أمريكي (USD)"]
+  )
+  exchange_rate = 1.41 if "USD" in currency_choice else 1.0
 
 if low_stock_count > 0:
   st.sidebar.markdown(
@@ -327,11 +337,12 @@ st.sidebar.write("---")
 
 current_role = st.session_state.get("user_role", "موظف مبيعات")
 
-# توزيع القوائم حسب الصلاحيات
 if current_role == "مدير النظام":
   menu_options = [
       "🛒 كاشير المبيعات (POS)",
-      "📊 لوحة المؤشرات (Dashboard)",
+      "📊 لوحة المؤشرات الذكية",
+      "🤖 التنبؤ الذكي بالمبيعات (AI)",
+      "📖 إدارة الديون والذمم المالية",
       "🚨 تنبيهات نقص المخزون",
       "👥 إدارة العملاء وبرنامج الولاء (CRM)",
       "📦 إدارة المنتجات وتوليد الباركود",
@@ -345,6 +356,7 @@ if current_role == "مدير النظام":
 else:
   menu_options = [
       "🛒 كاشير المبيعات (POS)",
+      "📖 إدارة الديون والذمم المالية",
       "👥 إدارة العملاء وبرنامج الولاء (CRM)",
       "📦 إدارة المنتجات وتوليد الباركود",
   ]
@@ -367,7 +379,7 @@ if menu == "🛒 كاشير المبيعات (POS)":
   df_products = get_products()
 
   conn = sqlite3.connect(DB_NAME)
-  df_cust = pd.read_sql_query("SELECT name FROM customers", conn)
+  df_cust = pd.read_sql_query("SELECT name, phone FROM customers", conn)
   conn.close()
 
   if df_products.empty:
@@ -424,8 +436,9 @@ if menu == "🛒 كاشير المبيعات (POS)":
 
       for idx, prod in filtered_df.iterrows():
         p1, p2, p3, p4 = st.columns([2.5, 1.2, 1.2, 1])
+        disp_price = prod["price"] * exchange_rate
         p1.write(f"**{prod['name']}**\n`{prod['barcode']}`")
-        p2.write(f"**{prod['price']:.2f} د.أ**")
+        p2.write(f"**{disp_price:.2f}**")
         p3.write(f"المخزن: `{prod['stock']}`")
         if p4.button("➕ إضافة", key=f"add_{prod['id']}"):
           if prod["stock"] > 0:
@@ -478,7 +491,7 @@ if menu == "🛒 كاشير المبيعات (POS)":
             item["subtotal"] = new_q * item["price"]
             item["profit"] = (item["price"] - item["cost_price"]) * new_q
             st.rerun()
-          c3.write(f"**{item['subtotal']:.2f} د.أ**")
+          c3.write(f"**{item['subtotal'] * exchange_rate:.2f}**")
           if c4.button("❌", key=f"del_{idx}"):
             st.session_state["cart"].pop(idx)
             st.rerun()
@@ -487,23 +500,44 @@ if menu == "🛒 كاشير المبيعات (POS)":
         subtotal_val = sum(item["subtotal"] for item in st.session_state["cart"])
 
         cust_name = st.selectbox(
-            "👤 اسم الزبون (للإفادة ونقاط الولاء):", df_cust["name"].tolist()
+            "👤 اسم الزبون:", df_cust["name"].tolist()
         )
+        pay_type = st.radio(
+            "طريقة الدفع:", ["نقدي (Cash)", "آجل (تسجيل ذمم)"], horizontal=True
+        )
+
         disc_val = st.number_input(
-            "قيمة الخصم (د.أ):",
-            min_value=0.0,
-            max_value=float(subtotal_val),
-            value=0.0,
+            "قيمة الخصم:", min_value=0.0, max_value=float(subtotal_val), value=0.0
         )
         grand_total = subtotal_val - disc_val
 
-        st.markdown(f"### 💳 الصافي المطلوب: `{grand_total:.2f} د.أ`")
+        st.markdown(
+            f"### 💳 الصافي المطلوب: `{grand_total * exchange_rate:.2f}`"
+        )
 
-        if st.button(
-            "✅ إتمام البيع وتوليد الفاتورة PDF",
-            type="primary",
-            use_container_width=True,
-        ):
+        col_b1, col_b2 = st.columns(2)
+        with col_b1:
+          checkout_btn = st.button(
+              "✅ إتمام البيع وتوليد PDF",
+              type="primary",
+              use_container_width=True,
+          )
+        with col_b2:
+          # زر إرسال واتساب مباشر
+          selected_cust_row = df_cust[df_cust["name"] == cust_name]
+          phone_num = (
+              selected_cust_row["phone"].values[0]
+              if not selected_cust_row.empty
+              else "962700000000"
+          )
+          wa_text = f"مرحباً {cust_name}، شكراً لتسوقك معنا. إجمالي فاتورتك: {grand_total:.2f} دينار."
+          whatsapp_url = f"https://wa.me/{phone_num}?text={urllib.parse.quote(wa_text) if 'urllib' in globals() else wa_text}"
+          st.markdown(
+              f'<a href="{whatsapp_url}" target="_blank"><button style="background-color: #25d366; color: white; border: none; padding: 10px; border-radius: 8px; width: 100%; font-weight: bold; cursor: pointer;">💬 إرسال عبر واتساب</button></a>',
+              unsafe_allow_html=True,
+          )
+
+        if checkout_btn:
           conn = sqlite3.connect(DB_NAME)
           c = conn.cursor()
           now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -515,8 +549,8 @@ if menu == "🛒 كاشير المبيعات (POS)":
             )
             c.execute(
                 """
-                            INSERT INTO sales (date, customer_name, product_name, quantity, total_price, discount, net_profit, seller_username)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            INSERT INTO sales (date, customer_name, product_name, quantity, total_price, discount, net_profit, seller_username, payment_type)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                 (
                     now_str,
@@ -527,6 +561,7 @@ if menu == "🛒 كاشير المبيعات (POS)":
                     disc_val,
                     item_profit,
                     seller,
+                    pay_type,
                 ),
             )
             c.execute(
@@ -534,11 +569,18 @@ if menu == "🛒 كاشير المبيعات (POS)":
                 (item["quantity"], item["id"]),
             )
 
-          c.execute(
-              "UPDATE customers SET total_spent = total_spent + ?, points ="
-              " points + ? WHERE name = ?",
-              (grand_total, int(grand_total), cust_name),
-          )
+          if "آجل" in pay_type:
+            c.execute(
+                "UPDATE customers SET debt = debt + ?, total_spent ="
+                " total_spent + ? WHERE name = ?",
+                (grand_total, grand_total, cust_name),
+            )
+          else:
+            c.execute(
+                "UPDATE customers SET total_spent = total_spent + ?, points ="
+                " points + ? WHERE name = ?",
+                (grand_total, int(grand_total), cust_name),
+            )
 
           conn.commit()
           c.execute("SELECT last_insert_rowid()")
@@ -548,7 +590,7 @@ if menu == "🛒 كاشير المبيعات (POS)":
           log_action(
               seller,
               "عملية بيع",
-              f"فاتورة #{last_inv_id} بقيمة {grand_total:.2f} د.أ",
+              f"فاتورة #{last_inv_id} بقيمة {grand_total:.2f} ({pay_type})",
           )
 
           pdf_bytes = generate_pdf_invoice(
@@ -560,7 +602,7 @@ if menu == "🛒 كاشير المبيعات (POS)":
               grand_total,
           )
 
-          st.success("🎉 تمت عملية البيع بنجاح وتحديث المخزن ونقاط العميل!")
+          st.success("🎉 تمت عملية البيع بنجاح وتحديث النظام!")
           st.download_button(
               label="📥 تحميل الفاتورة الرسمية (PDF)",
               data=pdf_bytes,
@@ -571,10 +613,10 @@ if menu == "🛒 كاشير المبيعات (POS)":
           st.session_state["cart"] = []
 
 # ----------------------------------------------------
-# 2. لوحة المؤشرات (Dashboard)
+# 2. لوحة المؤشرات الذكية
 # ----------------------------------------------------
-elif menu == "📊 لوحة المؤشرات (Dashboard)":
-  st.header("📊 لوحة مؤشرات الأداء والرسوم البيانية")
+elif menu == "📊 لوحة المؤشرات الذكية":
+  st.header("📊 لوحة مؤشرات الأداء والتحليلات")
 
   conn = sqlite3.connect(DB_NAME)
   df_sales = pd.read_sql_query("SELECT * FROM sales", conn)
@@ -609,7 +651,7 @@ elif menu == "📊 لوحة المؤشرات (Dashboard)":
           h_df,
           x="hour",
           y="total_price",
-          labels={"hour": "الساعة", "total_price": "المبيعات (د.أ)"},
+          labels={"hour": "الساعة", "total_price": "المبيعات"},
           color_discrete_sequence=["#d97706"],
       )
       st.plotly_chart(fig1, use_container_width=True)
@@ -627,7 +669,84 @@ elif menu == "📊 لوحة المؤشرات (Dashboard)":
       st.plotly_chart(fig2, use_container_width=True)
 
 # ----------------------------------------------------
-# 3. تنبيهات نقص المخزون
+# 3. التنبؤ الذكي بالمبيعات (AI)
+# ----------------------------------------------------
+elif menu == "🤖 التنبؤ الذكي بالمبيعات (AI)":
+  st.header("🤖 التنبؤ بحجم المبيعات المستقبلي (ميزة ذكاء اصطناعي)")
+  conn = sqlite3.connect(DB_NAME)
+  df_s = pd.read_sql_query("SELECT date, total_price FROM sales", conn)
+  conn.close()
+
+  if len(df_s) < 3:
+    st.warning("⚠️ يلزم تسجيل 3 عمليات مبيعات على الأقل لتفعيل نموذج التنبؤ.")
+  else:
+    df_s["date"] = pd.to_datetime(df_s["date"])
+    daily_sales = (
+        df_s.groupby(df_s["date"].dt.date)["total_price"].sum().reset_index()
+    )
+    daily_sales["day_index"] = np.arange(len(daily_sales))
+
+    X = daily_sales[["day_index"]]
+    y = daily_sales["total_price"]
+
+    # نموذج الانحدار الخطي البسيط
+    from sklearn.linear_model import LinearRegression
+
+    model = LinearRegression()
+    model.fit(X, y)
+
+    next_day_idx = np.array([[len(daily_sales)]])
+    predicted_sales = model.predict(next_day_idx)[0]
+
+    st.success(
+        f"📈 بناءً على خوارزميات التعلم الآلي والبيانات السابقة، المبيعات المتوقعة"
+        f" لليوم القادم تقريباً: **{max(0, predicted_sales):.2f} دينار**"
+    )
+
+    fig_ai = px.scatter(
+        daily_sales,
+        x="date",
+        y="total_price",
+        trendline="ols",
+        labels={"date": "التاريخ", "total_price": "المبيعات اليومية"},
+        title="تحليل واتجاه نمو المبيعات التاريخي",
+    )
+    st.plotly_chart(fig_ai, use_container_width=True)
+
+# ----------------------------------------------------
+# 4. إدارة الديون والذمم المالية
+# ----------------------------------------------------
+elif menu == "📖 إدارة الديون والذمم المالية":
+  st.header("📖 سجل الديون والذمم المستحقة على العملاء")
+  conn = sqlite3.connect(DB_NAME)
+  df_debts = pd.read_sql_query(
+      "SELECT id, name, phone, debt FROM customers WHERE debt > 0", conn
+  )
+  conn.close()
+
+  if df_debts.empty:
+    st.success("✅ لا توجد أي ديون مستحقة على العملاء حالياً!")
+  else:
+    st.dataframe(df_debts, use_container_width=True, hide_index=True)
+    st.subheader("💳 سداد دفعة من الدين")
+
+    with st.form("pay_debt_form"):
+      c_sel = st.selectbox("اختر العميل:", df_debts["name"].tolist())
+      p_amt = st.number_input("المبلغ المسدد (د.أ):", min_value=0.1)
+      if st.form_submit_button("💰 تأكيد سداد الدين", type="primary"):
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        c.execute(
+            "UPDATE customers SET debt = debt - ? WHERE name = ?",
+            (p_amt, c_sel),
+        )
+        conn.commit()
+        conn.close()
+        st.success("تم تحديث حساب العميل وتسجيل السداد بنجاح!")
+        st.rerun()
+
+# ----------------------------------------------------
+# 5. تنبيهات نقص المخزون
 # ----------------------------------------------------
 elif menu == "🚨 تنبيهات نقص المخزون":
   st.header("🚨 مراقبة النقص وإعادة التزويد")
@@ -646,7 +765,7 @@ elif menu == "🚨 تنبيهات نقص المخزون":
     st.dataframe(df_low, use_container_width=True, hide_index=True)
 
 # ----------------------------------------------------
-# 4. إدارة العملاء وبرنامج الولاء (CRM)
+# 6. إدارة العملاء وبرنامج الولاء (CRM)
 # ----------------------------------------------------
 elif menu == "👥 إدارة العملاء وبرنامج الولاء (CRM)":
   st.header("👥 مركز إدارة العملاء ونقاط الولاء")
@@ -655,7 +774,7 @@ elif menu == "👥 إدارة العملاء وبرنامج الولاء (CRM)":
   with t1:
     with st.form("cust_f", clear_on_submit=True):
       cn = st.text_input("اسم العميل:")
-      cp = st.text_input("رقم الهاتف:")
+      cp = st.text_input("رقم الهاتف (مثال: 9627xxxxxxxx):")
       ct = st.selectbox("التصنيف:", ["عادي", "برونزي", "فضي", "ذهبي (VIP)"])
       if st.form_submit_button("💾 حفظ العميل", type="primary"):
         if cn:
@@ -683,7 +802,7 @@ elif menu == "👥 إدارة العملاء وبرنامج الولاء (CRM)":
     conn.close()
 
 # ----------------------------------------------------
-# 5. إدارة المنتجات وتوليد الباركود
+# 7. إدارة المنتجات وتوليد الباركود
 # ----------------------------------------------------
 elif menu == "📦 إدارة المنتجات وتوليد الباركود":
   st.header("📦 إدارة المخزون وتوليد الباركود الحقيقي")
@@ -742,7 +861,7 @@ elif menu == "📦 إدارة المنتجات وتوليد الباركود":
         st.error(f"خطأ في توليد الباركود: {e}")
 
 # ----------------------------------------------------
-# 6. المصروفات والنثريات المالية
+# 8. المصروفات والنثريات المالية
 # ----------------------------------------------------
 elif menu == "💸 المصروفات والنثريات المالية":
   st.header("💸 المصروفات اليومية والنثريات")
@@ -787,7 +906,7 @@ elif menu == "💸 المصروفات والنثريات المالية":
       st.metric("إجمالي المصروفات", f"{df_exps['amount'].sum():.2f} د.أ")
 
 # ----------------------------------------------------
-# 7. طلبات الموردين والشراء
+# 9. طلبات الموردين والشراء
 # ----------------------------------------------------
 elif menu == "🚚 طلبات الموردين والشراء":
   st.header("🚚 سجل طلبات التوريد والشراء")
@@ -838,7 +957,7 @@ elif menu == "🚚 طلبات الموردين والشراء":
       st.dataframe(df_purs, use_container_width=True, hide_index=True)
 
 # ----------------------------------------------------
-# 8. أرباح المنتجات والتقارير
+# 10. أرباح المنتجات والتقارير
 # ----------------------------------------------------
 elif menu == "📈 أرباح المنتجات والتقارير":
   st.header("📈 تقرير أداء وأرباح المنتجات")
@@ -867,7 +986,7 @@ elif menu == "📈 أرباح المنتجات والتقارير":
     st.plotly_chart(fig_p, use_container_width=True)
 
 # ----------------------------------------------------
-# 9. إدارة المستخدمين والصلاحيات
+# 11. إدارة المستخدمين والصلاحيات
 # ----------------------------------------------------
 elif menu == "⚙️ إدارة المستخدمين والصلاحيات":
   st.header("⚙️ إدارة صلاحيات وحسابات النظام")
@@ -901,7 +1020,7 @@ elif menu == "⚙️ إدارة المستخدمين والصلاحيات":
     st.dataframe(df_u, use_container_width=True, hide_index=True)
 
 # ----------------------------------------------------
-# 10. سجل الرقابة الأمنية (Audit Log)
+# 12. سجل الرقابة الأمنية (Audit Log)
 # ----------------------------------------------------
 elif menu == "📜 سجل الرقابة الأمنية (Audit Log)":
   st.header("📜 سجل العمليات والرقابة الأمنية")
@@ -914,7 +1033,7 @@ elif menu == "📜 سجل الرقابة الأمنية (Audit Log)":
   conn.close()
 
 # ----------------------------------------------------
-# 11. النسخ الاحتياطي
+# 13. النسخ الاحتياطي
 # ----------------------------------------------------
 elif menu == "💾 النسخ الاحتياطي":
   st.header("💾 النسخ الاحتياطي لقاعدة البيانات")
