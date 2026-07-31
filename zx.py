@@ -45,13 +45,6 @@ st.markdown("""
     div[data-testid="stMetricValue"] {
         color: #f59e0b !important;
     }
-    .gold-box {
-        border: 2px solid #f59e0b;
-        padding: 12px;
-        border-radius: 10px;
-        background-color: #111827;
-        margin-bottom: 10px;
-    }
     .welcome-card {
         border: 2px solid #d97706;
         background: linear-gradient(135deg, #111827 0%, #1f2937 100%);
@@ -143,12 +136,13 @@ def init_db():
         )
     ''')
     
+    # إضافة مستخدمين افتراضيين لكل الرتب إذا كانت الجدول فارغاً
     c.execute("SELECT COUNT(*) FROM users")
     if c.fetchone()[0] == 0:
-        c.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", ("admin", "admin123", "Admin"))
-        c.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", ("cashier1", "1234", "Cashier"))
+        c.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", ("owner", "owner123", "الإدارة العليا (Owner)"))
+        c.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", ("inventory_mgr", "inv123", "إدارة المستودع والمخزون"))
+        c.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", ("cashier1", "123", "كاشير المبيعات"))
 
-    # إضافة زبون عام افتراضي
     c.execute("SELECT COUNT(*) FROM customers")
     if c.fetchone()[0] == 0:
         c.execute("INSERT INTO customers (name, phone, points, total_spent, tier) VALUES (?, ?, ?, ?, ?)", ("زبون عام", "0700000000", 0, 0.0, "عادي"))
@@ -167,7 +161,6 @@ def log_action(username, action, details):
     conn.commit()
     conn.close()
 
-# توليد ملف PDF للفاتورة
 def generate_pdf_invoice(invoice_id, cust_name, items, subtotal, discount, grand_total, pay_method):
     pdf = FPDF()
     pdf.add_page()
@@ -181,7 +174,6 @@ def generate_pdf_invoice(invoice_id, cust_name, items, subtotal, discount, grand
     pdf.cell(200, 8, txt=f"Payment Method: {pay_method}", ln=True, align='R')
     pdf.ln(5)
 
-    # جدول المنتجات
     pdf.set_font("Arial", 'B', 10)
     pdf.cell(80, 8, "Product", 1, 0, 'C')
     pdf.cell(30, 8, "Qty", 1, 0, 'C')
@@ -203,7 +195,6 @@ def generate_pdf_invoice(invoice_id, cust_name, items, subtotal, discount, grand
     
     return pdf.output(dest='S').encode('latin1')
 
-# دالة لتوليد صورة باركود حقيقية
 def create_barcode_image(barcode_text):
     rv = io.BytesIO()
     Code128 = barcode.get_barcode_class('code128')
@@ -259,7 +250,7 @@ if not st.session_state["authenticated"]:
     st.stop()
 
 # ----------------------------------------------------
-# 4. القائمة الجانبية ونظام الإشعارات الذكي (ميزة 3)
+# 4. القائمة الجانبية ونظام الإشعارات الذكي
 # ----------------------------------------------------
 conn = sqlite3.connect(DB_NAME)
 low_stock_count = pd.read_sql_query("SELECT COUNT(*) FROM products WHERE stock <= min_stock", conn).iloc[0,0]
@@ -270,7 +261,6 @@ st.sidebar.title("👑 متجر الهاشمية")
 st.sidebar.markdown(f"👤 **المستخدم:** `{st.session_state['logged_user']}`")
 st.sidebar.markdown(f"🛡️ **الصلاحية:** `{st.session_state['user_role']}`")
 
-# تنبيهات الإشعارات في القائمة الجانبية
 if low_stock_count > 0 or unpaid_debts_count > 0:
     st.sidebar.markdown(f"""
     <div style="background-color: #7f1d1d; border: 1px solid #ef4444; padding: 8px; border-radius: 8px; margin-bottom: 10px; font-size: 13px; text-align: center;">
@@ -286,9 +276,10 @@ if st.sidebar.button("🚪 تسجيل الخروج", use_container_width=True):
 
 st.sidebar.write("---")
 
-current_role = st.session_state.get("user_role", "Cashier")
+current_role = st.session_state.get("user_role", "كاشير المبيعات")
 
-if current_role == "Admin":
+# توزيع القوائم حسب الرتب الجديدة
+if current_role == "الإدارة العليا (Owner)":
     menu_options = [
         "🛒 كاشير المبيعات (POS)",
         "📊 لوحة التحكّم الذكية (Dashboard)",
@@ -298,16 +289,17 @@ if current_role == "Admin":
         "🔄 إرجاع واستبدال الفواتير",
         "📦 إدارة وتعديل المخزون والباركود",
         "🏷️ طباعة بطاقات الأسعار",
+        "⚙️ إدارة الحسابات والصلاحيات",
         "📜 سجل الأحداث والرقابة",
-        "⚙️ النسخ الاحتياطي"
+        "💾 النسخ الاحتياطي"
     ]
-elif current_role == "Inventory":
+elif current_role == "إدارة المستودع والمخزون":
     menu_options = [
         "📦 إدارة وتعديل المخزون والباركود",
         "🚨 تنبيهات النقص وإعادة التزويد",
         "🏷️ طباعة بطاقات الأسعار"
     ]
-else:
+else: # كاشير المبيعات
     menu_options = [
         "🛒 كاشير المبيعات (POS)",
         "👥 إدارة العملاء وبرنامج الولاء (CRM)",
@@ -324,7 +316,7 @@ def get_products():
     return df
 
 # ----------------------------------------------------
-# 1. كاشير المبيعات (مع دعم توليد PDF والفاتورة)
+# 1. كاشير المبيعات (POS)
 # ----------------------------------------------------
 if menu == "🛒 كاشير المبيعات (POS)":
     st.header("🛒 نقطة البيع الذكية (POS)")
@@ -359,7 +351,7 @@ if menu == "🛒 كاشير المبيعات (POS)":
                                 "cost_price": prod['cost_price'], "quantity": 1,
                                 "subtotal": prod['price'], "profit": prod['price'] - prod['cost_price']
                             })
-                        st.success(تم إضافة {prod['name']} بنجاح!)
+                        st.success(f"تم إضافة {prod['name']} بنجاح!")
                         st.rerun()
 
             search_query = st.text_input("🔎 تصفية بالاسم:", key="pos_search")
@@ -421,7 +413,7 @@ if menu == "🛒 كاشير المبيعات (POS)":
                     conn = sqlite3.connect(DB_NAME)
                     c = conn.cursor()
                     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    seller = st.session_state.get("logged_user", "admin")
+                    seller = st.session_state.get("logged_user", "owner")
                     
                     for item in st.session_state["cart"]:
                         item_profit = item['profit'] - (disc_val / len(st.session_state["cart"]))
@@ -435,20 +427,17 @@ if menu == "🛒 كاشير المبيعات (POS)":
                         c.execute("INSERT INTO debts (customer_name, amount, date, notes, status) VALUES (?, ?, ?, ?, ?)", 
                                   (cust_name, grand_total, now_str, f"فاتورة مبيعات بتاريخ {now_str}", "غير مدفوع"))
 
-                    # تحديث إجمالي المشتريات ونقاط الزبون (برنامج الولاء - ميزة 5)
                     c.execute("UPDATE customers SET total_spent = total_spent + ?, points = points + ? WHERE name = ?", 
                               (grand_total, int(grand_total), cust_name))
                     
                     conn.commit()
                     
-                    # جلب رقم الفاتورة الأخيرة
                     c.execute("SELECT last_insert_rowid()")
                     last_inv_id = c.fetchone()[0]
                     conn.close()
 
                     log_action(seller, "بيع", f"فاتورة #{last_inv_id} بقيمة {grand_total:.2f} د.أ للزبون {cust_name}")
                     
-                    # توليد ملف PDF
                     pdf_bytes = generate_pdf_invoice(last_inv_id, cust_name, st.session_state["cart"], subtotal_val, disc_val, grand_total, pay_method)
                     
                     st.success("🎉 تمت عملية البيع بنجاح!")
@@ -462,7 +451,7 @@ if menu == "🛒 كاشير المبيعات (POS)":
                     st.session_state["cart"] = []
 
 # ----------------------------------------------------
-# 2. لوحة التحكم الذكية والرسوم البيانية المتقدمة (ميزة 1 - Plotly)
+# 2. لوحة التحكم الذكية
 # ----------------------------------------------------
 elif menu == "📊 لوحة التحكّم الذكية (Dashboard)":
     st.header("📊 لوحة المؤشرات والرسوم البيانية التفاعلية (Advanced Dashboard)")
@@ -479,7 +468,6 @@ elif menu == "📊 لوحة التحكّم الذكية (Dashboard)":
         df_sales['day_name'] = df_sales['date'].dt.day_name()
         df_sales['month_year'] = df_sales['date'].dt.to_period('M').astype(str)
 
-        # مقارنة الأرباح بين الشهر الحالي والسابق
         current_month = datetime.datetime.now().strftime("%Y-%m")
         prev_month = (datetime.datetime.now().replace(day=1) - datetime.timedelta(days=1)).strftime("%Y-%m")
         
@@ -505,16 +493,6 @@ elif menu == "📊 لوحة التحكّم الذكية (Dashboard)":
             daily_sales = df_sales.groupby("day_name")["total_price"].sum().reset_index()
             fig_day = px.pie(daily_sales, names="day_name", values="total_price", hole=0.4, color_discrete_sequence=px.colors.sequential.Sunset)
             st.plotly_chart(fig_day, use_container_width=True)
-
-        st.divider()
-        st.subheader("📈 توقع حركة استهلاك المواد (تحليل المخزون)")
-        df_prods = get_products()
-        if not df_prods.empty:
-            sales_speed = df_sales.groupby("product_name")["quantity"].sum().reset_index()
-            sales_speed.columns = ["اسم المنتج", "إجمالي المباع"]
-            merged_stock = pd.merge(df_prods, sales_speed, left_on="name", right_on="اسم المنتج", how="left").fillna(0)
-            merged_stock['حالة النفاد المتوقع'] = merged_stock.apply(lambda r: "🚨 خطر النفاد قريباً" if r['stock'] <= r['min_stock'] else "✅ مستقر", axis=1)
-            st.dataframe(merged_stock[["name", "stock", "min_stock", "إجمالي المباع", "حالة النفاد المتوقع"]], use_container_width=True, hide_index=True)
 
 # ----------------------------------------------------
 # 3. تنبيهات النقص وإعادة التزويد
@@ -563,7 +541,7 @@ elif menu == "📙 سجل الذمم وتسديد الديون":
                 st.rerun()
 
 # ----------------------------------------------------
-# 5. إدارة العملاء وبرنامج الولاء (ميزة 5 - CRM)
+# 5. إدارة العملاء وبرنامج الولاء (CRM)
 # ----------------------------------------------------
 elif menu == "👥 إدارة العملاء وبرنامج الولاء (CRM)":
     st.header("👥 مركز إدارة العملاء وبرنامج الولاء النقاط والخصومات")
@@ -573,7 +551,7 @@ elif menu == "👥 إدارة العملاء وبرنامج الولاء (CRM)":
     with tab_add:
         with st.form("add_cust_form", clear_on_submit=True):
             c_name = st.text_input("اسم العميل:")
-            c_phone = st.text_input("رقم الهاتق:")
+            c_phone = st.text_input("رقم الهاتف:")
             c_tier = st.selectbox("الفئة / التصنيف:", ["عادي", "برونزي", "فضي", "ذهبي (VIP)"])
             if st.form_submit_button("💾 حفظ العميل", type="primary"):
                 if c_name:
@@ -595,7 +573,7 @@ elif menu == "👥 إدارة العملاء وبرنامج الولاء (CRM)":
         st.dataframe(df_customers, use_container_width=True, hide_index=True)
 
 # ----------------------------------------------------
-# 6. إرجاع واستبدال الفواتير (مع توليد سند PDF)
+# 6. إرجاع واستبدال الفواتير
 # ----------------------------------------------------
 elif menu == "🔄 إرجاع واستبدال الفواتير":
     st.header("🔄 قسم استرجاع الفواتير")
@@ -634,12 +612,12 @@ elif menu == "🔄 إرجاع واستبدال الفواتير":
                 st.success(f"تم إرجاع {ret_q} قطعة واسترداد {refund_val:.2f} د.أ للعميل!")
 
 # ----------------------------------------------------
-# 7. إدارة وتعديل المخزون مع توليد الباركود الحقيقي (ميزة 4)
+# 7. إدارة وتعديل المخزون والباركود
 # ----------------------------------------------------
 elif menu == "📦 إدارة وتعديل المخزون والباركود":
     st.header("📦 إدارة المنتجات وتوليد الباركود الحقيقي")
     
-    tab1, tab2 = st.tabs(["➕ إضافة صنف جديد", "🏷️ عرض الباركود وطباعته"])
+    tab1, tab2 = st.tabs(["➕ إضافة / تعديل صنف", "🏷️ عرض الباركود وطباعته"])
     
     with tab1:
         with st.form("add_p_form", clear_on_submit=True):
@@ -706,7 +684,61 @@ elif menu == "🏷️ طباعة بطاقات الأسعار":
         st.download_button("🖨️ طباعة البطاقة (HTML)", data=f"<html><body onload='window.print();'>{tag_html}</body></html>", file_name=f"Tag_{p_data['id']}.html", mime="text/html")
 
 # ----------------------------------------------------
-# 9. سجل الأحداث والرقابة (Audit Log)
+# 9. إدارة الحسابات والصلاحيات (خاص بالإدارة العليا حصراً)
+# ----------------------------------------------------
+elif menu == "⚙️ إدارة الحسابات والصلاحيات":
+    st.header("⚙️ إدارة الحسابات، صلاحيات المستخدمين، وإضافة موظفين جدد")
+    
+    tab_u1, tab_u2 = st.tabs(["➕ إضافة مستخدم جديد", "📋 قائمة المستخدمين والصلاحيات"])
+    
+    with tab_u1:
+        with st.form("new_user_form", clear_on_submit=True):
+            new_uname = st.text_input("اسم المستخدم الجديد:")
+            new_pass = st.text_input("كلمة المرور:", type="password")
+            new_role = st.selectbox("اختر الرتبة / الصلاحية:", [
+                "الإدارة العليا (Owner)",
+                "إدارة المستودع والمخزون",
+                "كاشير المبيعات"
+            ])
+            if st.form_submit_button("💾 إنشاء الحساب", type="primary"):
+                if new_uname and new_pass:
+                    try:
+                        conn = sqlite3.connect(DB_NAME)
+                        c = conn.cursor()
+                        c.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", (new_uname, new_pass, new_role))
+                        conn.commit()
+                        conn.close()
+                        st.success(f"تم إنشاء حساب `{new_uname}` برتبة `{new_role}` بنجاح!")
+                        log_action(st.session_state['logged_user'], "إدارة مستخدمين", f"إضافة حساب جديد: {new_uname} برتبة {new_role}")
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("اسم المستخدم مستخدم مسبقاً!")
+
+    with tab_u2:
+        conn = sqlite3.connect(DB_NAME)
+        df_users = pd.read_sql_query("SELECT id, username, role FROM users", conn)
+        conn.close()
+        st.dataframe(df_users, use_container_width=True, hide_index=True)
+        
+        st.divider()
+        st.subheader("🗑️ حذف مستخدم")
+        del_user_id = st.selectbox("اختر رقم أو اسم المستخدم للحذف:", df_users["id"].tolist(), format_func=lambda x: f"ID: {x} - {df_users[df_users['id']==x]['username'].values[0]}")
+        if st.button("❌ حذف الحساب المحدد", type="primary"):
+            target_uname = df_users[df_users['id'] == del_user_id]['username'].values[0]
+            if target_uname == "owner":
+                st.error("لا يمكن حذف الحساب الرئيسي للإدارة العليا!")
+            else:
+                conn = sqlite3.connect(DB_NAME)
+                c = conn.cursor()
+                c.execute("DELETE FROM users WHERE id = ?", (del_user_id,))
+                conn.commit()
+                conn.close()
+                st.success(f"تم حذف المستخدم {target_uname} بنجاح!")
+                log_action(st.session_state['logged_user'], "إدارة مستخدمين", f"حذف الحساب: {target_uname}")
+                st.rerun()
+
+# ----------------------------------------------------
+# 10. سجل الأحداث والرقابة (Audit Log)
 # ----------------------------------------------------
 elif menu == "📜 سجل الأحداث والرقابة":
     st.header("📜 سجل الرقابة الأمنية")
@@ -715,9 +747,9 @@ elif menu == "📜 سجل الأحداث والرقابة":
     conn.close()
 
 # ----------------------------------------------------
-# 10. النسخ الاحتياطي للنظام
+# 11. النسخ الاحتياطي للنظام
 # ----------------------------------------------------
-elif menu == "⚙️ النسخ الاحتياطي":
+elif menu == "💾 النسخ الاحتياطي":
     st.header("⚙️ النسخ الاحتياطي للقاعدة")
     with open(DB_NAME, "rb") as f:
-        st.download_button("💾 تحميل نسخة `.db`", data=f, file_name=f"Backup_{datetime.date.today()}.db", mime="application/x-sqlite3", type="primary", use_container_width=True)
+        st.download_button("💾 تحميل نسخة قاعدة البيانات `.db`", data=f, file_name=f"Backup_{datetime.date.today()}.db", mime="application/x-sqlite3", type="primary", use_container_width=True)
