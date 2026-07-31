@@ -2,6 +2,7 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 import datetime
+import os
 
 # ----------------------------------------------------
 # 1. إعدادات الصفحة والهوية البصرية باللون الذهبي
@@ -60,7 +61,7 @@ st.markdown("""
 DB_NAME = "al_hashemiah_pos.db"
 
 # ----------------------------------------------------
-# 2. إنشاء وتحديث قاعدة البيانات
+# 2. إنشاء وتحديث قاعدة البيانات (لا تمسح البيانات القديمة أبداً)
 # ----------------------------------------------------
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -124,6 +125,7 @@ def init_db():
         )
     ''')
     
+    # التحقق من وجود مستخدمين افتراضيين فقط إذا كان الجدول فارغاً تماماً
     c.execute("SELECT COUNT(*) FROM users")
     if c.fetchone()[0] == 0:
         c.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", ("admin", "admin123", "Admin"))
@@ -165,7 +167,7 @@ if not st.session_state["authenticated"]:
     with col_l2:
         st.markdown("""
         <div class="welcome-card">
-            <h1 style="color: #f59e0b; margin-bottom: 5px;">👑 متجر رغد المومني</h1>
+            <h1 style="color: #f59e0b; margin-bottom: 5px;">👑 متجر الهاشمية</h1>
             <h3 style="color: #f8fafc; font-size: 18px; margin-top: 0;">أهلاً وسهلاً بكم في نظام المبيعات والمخزون الذكي</h3>
             <p style="color: #9ca3af; font-size: 13px;">يرجى إدخال بيانات حسابك لتسجيل الدخول لبدء العمليات</p>
         </div>
@@ -768,16 +770,13 @@ elif menu == "📊 التقارير المالية والأرباح":
     if df_sales.empty:
         st.info("لا توجد مبيعات مسجلة للتقرير حالياً.")
     else:
-        # التأكد من أن الأعمدة الرقمية بصيغة أرقام صحيحة أو عشرية لتجنب أخطاء التجميع
         df_sales["total_price"] = pd.to_numeric(df_sales["total_price"], errors="coerce").fillna(0.0)
         df_sales["discount"] = pd.to_numeric(df_sales["discount"], errors="coerce").fillna(0.0)
         df_sales["net_profit"] = pd.to_numeric(df_sales["net_profit"], errors="coerce").fillna(0.0)
         df_sales["quantity"] = pd.to_numeric(df_sales["quantity"], errors="coerce").fillna(0)
 
-        # تحويل عمود التاريخ لتسهيل الفلترة
         df_sales["date_only"] = pd.to_datetime(df_sales["date"]).dt.date
 
-        # شريط خيارات الفلترة المتقدمة
         st.markdown("#### 📅 فلترة التقارير حسب النطاق الزمني")
         filter_option = st.selectbox("اختر الفترة:", ["الكل", "اليوم الحالي", "آخر 7 أيام", "آخر 30 يوماً", "تاريخ مخصص"])
 
@@ -803,7 +802,6 @@ elif menu == "📊 التقارير المالية والأرباح":
         if filtered_df.empty:
             st.warning("⚠️ لا توجد مبيعات مسجلة ضمن النطاق الزمني المحدد.")
         else:
-            # مؤشرات الأداء الرئيسية (KPIs)
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("إجمالي المبيعات", f"{filtered_df['total_price'].sum():.2f} د.أ")
             m2.metric("إجمالي الخصومات", f"{filtered_df['discount'].sum():.2f} د.أ")
@@ -812,7 +810,6 @@ elif menu == "📊 التقارير المالية والأرباح":
 
             st.divider()
 
-            # تحليلات تفصيلية
             col_ch1, col_ch2 = st.columns(2)
             
             with col_ch1:
