@@ -2,6 +2,7 @@ import datetime
 import io
 import os
 import sqlite3
+import urllib.parse
 import barcode
 from barcode.writer import ImageWriter
 from fpdf import FPDF
@@ -55,6 +56,13 @@ st.markdown(
         margin: auto;
         max-width: 500px;
     }
+    .product-card {
+        background-color: #111827;
+        border: 1px solid #1f2937;
+        padding: 12px;
+        border-radius: 10px;
+        margin-bottom: 8px;
+    }
 </style>
 """,
     unsafe_allow_html=True,
@@ -64,7 +72,7 @@ DB_NAME = "graduation_project_pos.db"
 
 
 # ----------------------------------------------------
-# 2. إنشاء وتحديث قاعدة البيانات (جداول متكاملة مع الذمم والعملات)
+# 2. إنشاء وتحديث قاعدة البيانات
 # ----------------------------------------------------
 def init_db():
   conn = sqlite3.connect(DB_NAME)
@@ -151,7 +159,6 @@ def init_db():
         )
     """)
 
-  # إضافة حسابات افتراضية إذا كانت الجداول فارغة
   c.execute("SELECT COUNT(*) FROM users")
   if c.fetchone()[0] == 0:
     c.execute(
@@ -311,7 +318,6 @@ st.sidebar.title("👑 لوحة التحكم الرئيسية")
 st.sidebar.markdown(f"👤 **المستخدم:** `{st.session_state['logged_user']}`")
 st.sidebar.markdown(f"🛡️ **الصلاحية:** `{st.session_state['user_role']}`")
 
-# أداة تحويل العملات السريعة في الشريط الجانبي
 with st.sidebar.expander("💱 محول العملات السريع"):
   currency_choice = st.selectbox(
       "العملة المعروضة:", ["دينار أردني (JOD)", "دولار أمريكي (USD)"]
@@ -434,13 +440,27 @@ if menu == "🛒 كاشير المبيعات (POS)":
             df_products["name"].str.contains(search_query, case=False, na=False)
         ]
 
+      # عرض المنتجات في بطاقات مرتبة ومنسقة بشكل جميل
       for idx, prod in filtered_df.iterrows():
-        p1, p2, p3, p4 = st.columns([2.5, 1.2, 1.2, 1])
-        disp_price = prod["price"] * exchange_rate
-        p1.write(f"**{prod['name']}**\n`{prod['barcode']}`")
-        p2.write(f"**{disp_price:.2f}**")
-        p3.write(f"المخزن: `{prod['stock']}`")
-        if p4.button("➕ إضافة", key=f"add_{prod['id']}"):
+        st.markdown(
+            f"""
+            <div class="product-card">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <b style="font-size: 16px; color: #f59e0b;">{prod['name']}</b><br>
+                        <span style="color: #9ca3af; font-size: 12px;">الباركود: {prod['barcode']} | المخزن: <b style="color: #38bdf8;">{prod['stock']}</b></span>
+                    </div>
+                    <div style="text-align: left;">
+                        <span style="font-size: 16px; font-weight: bold; color: #34d399;">{prod['price'] * exchange_rate:.2f} د.أ</span>
+                    </div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # زر الإضافة منفصل بدقة لضمان عدم حدوث تداخل
+        if st.button("➕ إضافة للسلة", key=f"add_btn_{prod['id']}"):
           if prod["stock"] > 0:
             existing_item = next(
                 (
@@ -469,7 +489,9 @@ if menu == "🛒 كاشير المبيعات (POS)":
                   "profit": prod["price"] - prod["cost_price"],
               })
             st.rerun()
-        st.markdown("<hr style='margin: 4px 0;'>", unsafe_allow_html=True)
+          else:
+            st.error("نفذت الكمية من المخزن!")
+        st.write("")
 
     with col_cart:
       st.subheader("🛒 سلة المشتريات الحالية")
@@ -523,7 +545,6 @@ if menu == "🛒 كاشير المبيعات (POS)":
               use_container_width=True,
           )
         with col_b2:
-          # زر إرسال واتساب مباشر
           selected_cust_row = df_cust[df_cust["name"] == cust_name]
           phone_num = (
               selected_cust_row["phone"].values[0]
@@ -531,9 +552,9 @@ if menu == "🛒 كاشير المبيعات (POS)":
               else "962700000000"
           )
           wa_text = f"مرحباً {cust_name}، شكراً لتسوقك معنا. إجمالي فاتورتك: {grand_total:.2f} دينار."
-          whatsapp_url = f"https://wa.me/{phone_num}?text={urllib.parse.quote(wa_text) if 'urllib' in globals() else wa_text}"
+          whatsapp_url = f"https://wa.me/{phone_num}?text={urllib.parse.quote(wa_text)}"
           st.markdown(
-              f'<a href="{whatsapp_url}" target="_blank"><button style="background-color: #25d366; color: white; border: none; padding: 10px; border-radius: 8px; width: 100%; font-weight: bold; cursor: pointer;">💬 إرسال عبر واتساب</button></a>',
+              f'<a href="{whatsapp_url}" target="_blank"><button style="background-color: #25d366; color: white; border: none; padding: 10px; border-radius: 8px; width: 100%; font-weight: bold; cursor: pointer;">💬 إرسال واتساب</button></a>',
               unsafe_allow_html=True,
           )
 
@@ -689,7 +710,6 @@ elif menu == "🤖 التنبؤ الذكي بالمبيعات (AI)":
     X = daily_sales[["day_index"]]
     y = daily_sales["total_price"]
 
-    # نموذج الانحدار الخطي البسيط
     from sklearn.linear_model import LinearRegression
 
     model = LinearRegression()
